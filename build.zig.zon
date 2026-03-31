@@ -1,0 +1,11 @@
+.{
+    .name = .netmesh,
+    .version = "0.0.1",
+    .minimum_zig_version = "0.16.0-dev.2490+fce7878a9",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+    .fingerprint = 0xd2a5d56a6dd51141,
+}
