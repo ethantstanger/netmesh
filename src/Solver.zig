@@ -54,6 +54,66 @@ const Cell = struct {
 
     seg_flags: u32,
     end_flags: u32,
+
+    fn index(self: *const Cell, solver: *const Solver) usize {
+        return self - solver.cells.ptr;
+    }
+
+    fn onSideW(self: *const Cell, solver: *const Solver) bool {
+        return self.index(solver) % solver.puzzle.colCount() == 0;
+    }
+
+    fn onSideE(self: *const Cell, solver: *const Solver) bool {
+        return (self.index(solver) + 1) % solver.puzzle.colCount() == 0;
+    }
+
+    fn onSideN(self: *const Cell, solver: *const Solver) bool {
+        return @divTrunc(self.index(solver), solver.puzzle.rowCount()) == 0;
+    }
+
+    fn onSideS(self: *const Cell, solver: *const Solver) bool {
+        return @divTrunc(self.index(solver), solver.puzzle.rowCount()) + 1 == solver.puzzle.rowCount();
+    }
+
+    fn getN(self: *const Cell, solver: *const Solver) ?*Cell {
+        if (self.onSideN(solver)) return null;
+        return &solver.cells[self.index(solver) - solver.puzzle.colCount()];
+    }
+
+    fn getNE(self: *const Cell, solver: *const Solver) ?*Cell {
+        if (self.onSideN(solver) or self.onSideE(solver)) return null;
+        return &solver.cells[self.index(solver) - solver.puzzle.colCount() + 1];
+    }
+
+    fn getE(self: *const Cell, solver: *const Solver) ?*Cell {
+        if (self.onSideE(solver)) return null;
+        return &solver.cells[self.index(solver) + 1];
+    }
+
+    fn getSE(self: *const Cell, solver: *const Solver) ?*Cell {
+        if (self.onSideE(solver) or self.onSideS(solver)) return null;
+        return &solver.cells[self.index(solver) + solver.puzzle.colCount() + 1];
+    }
+
+    fn getS(self: *const Cell, solver: *const Solver) ?*Cell {
+        if (self.onSideS(solver)) return null;
+        return &solver.cells[self.index(solver) + solver.puzzle.colCount()];
+    }
+
+    fn getSW(self: *const Cell, solver: *const Solver) ?*Cell {
+        if (self.onSideS(solver) or self.onSideW(solver)) return null;
+        return &solver.cells[self.index(solver) + solver.puzzle.colCount() - 1];
+    }
+
+    fn getW(self: *const Cell, solver: *const Solver) ?*Cell {
+        if (self.onSideW(solver)) return null;
+        return &solver.cells[self.index(solver) - 1];
+    }
+
+    fn getNW(self: *const Cell, solver: *const Solver) ?*Cell {
+        if (self.onSideW(solver) or self.onSideN(solver)) return null;
+        return &solver.cells[self.index(solver) - solver.puzzle.colCount() - 1];
+    }
 };
 
 puzzle: *const Puzzle,
@@ -66,9 +126,14 @@ pub fn from(a: std.mem.Allocator, puzzle: *const Puzzle) !Solver {
 
     const cells = try a.alloc(Cell, puzzle.nodes.len);
     @memset(cells, .{ .seg_flags = Cell.seg_mask.full, .end_flags = 0 });
+
+    var default: u32 = 0;
+    for (puzzle.nodes) |it| {
+        if (it) |end| default |= end.toEndFlags();
+    }
+
     for (puzzle.nodes, 0..) |it, i| {
-        if (it == null) continue;
-        cells[i].end_flags |= @as(u32, 1) << @intFromEnum(it.?);
+        cells[i].end_flags |= if (it) |end| end.toEndFlags() else default;
     }
 
     var solver = Solver{ .puzzle = puzzle, .cells = cells };
@@ -76,23 +141,46 @@ pub fn from(a: std.mem.Allocator, puzzle: *const Puzzle) !Solver {
     return solver;
 }
 
-fn collapseSideCells(self: *Solver) void {
-    for (self.cells, 0..) |*it, i| {
-        const w_side = i % self.puzzle.colCount() == 0;
-        const e_side = (i + 1) % self.puzzle.colCount() == 0;
-        const n_side = @divTrunc(i, self.puzzle.rowCount()) == 0;
-        const s_side = @divTrunc(i, self.puzzle.rowCount()) + 1 == self.puzzle.rowCount();
+const SolveError = error{};
 
+pub fn solve(self: *Solver) SolveError!void {
+    self.collapseAdjacentDisparateEnds();
+}
+
+fn collapseSideCells(self: *Solver) void {
+    for (self.cells) |*it| {
         const mask = Cell.seg_mask;
-        if (n_side) it.seg_flags &= ~(mask.full_nw | mask.full_n | mask.full_ne);
-        if (e_side) it.seg_flags &= ~(mask.full_ne | mask.full_e | mask.full_se);
-        if (s_side) it.seg_flags &= ~(mask.full_se | mask.full_s | mask.full_sw);
-        if (w_side) it.seg_flags &= ~(mask.full_sw | mask.full_w | mask.full_nw);
+        if (it.onSideN(self)) it.seg_flags &= ~(mask.full_nw | mask.full_n | mask.full_ne);
+        if (it.onSideE(self)) it.seg_flags &= ~(mask.full_ne | mask.full_e | mask.full_se);
+        if (it.onSideS(self)) it.seg_flags &= ~(mask.full_se | mask.full_s | mask.full_sw);
+        if (it.onSideW(self)) it.seg_flags &= ~(mask.full_sw | mask.full_w | mask.full_nw);
     }
 }
 
-pub fn getCell(self: *const Solver, col: usize, row: usize) Cell {
-    return self.cells[(row * (self.puzzle.row_hints.len + 1)) + col];
+fn collapseAdjacentDisparateEnds(self: *Solver) void {
+    for (self.cells) |*a| {
+        if (a.getE(self)) |b| inner: {
+            if (a.end_flags & b.end_flags != 0) break :inner;
+            a.seg_flags &= ~Cell.seg_mask.full_e;
+            b.seg_flags &= ~Cell.seg_mask.full_s;
+        }
+
+        if (a.getSE(self)) |b| inner: {
+            if (a.end_flags & b.end_flags != 0) break :inner;
+            a.seg_flags &= ~Cell.seg_mask.full_se;
+            b.seg_flags &= ~Cell.seg_mask.full_nw;
+        }
+
+        if (a.getS(self)) |b| inner: {
+            if (a.end_flags & b.end_flags != 0) break :inner;
+            a.seg_flags &= ~Cell.seg_mask.full_s;
+            b.seg_flags &= ~Cell.seg_mask.full_n;
+        }
+    }
+}
+
+fn cell(self: *const Solver, col: usize, row: usize) *Cell {
+    return &self.cells[(row * (self.puzzle.row_hints.len + 1)) + col];
 }
 
 pub fn printData(self: *const Solver) void {
@@ -119,7 +207,7 @@ pub fn printGrid(self: *const Solver) void {
 
     print("     ", .{});
     for (self.puzzle.col_hints) |it| {
-        if (it == null) print("    ", .{}) else print(" {d:0>2}", .{it.?});
+        if (it) |hint| print(" {d:0>2}", .{hint}) else print("   ", .{});
     }
     print("\n   \u{250c}", .{});
     for (0..self.puzzle.colCount()) |_| {
@@ -129,32 +217,32 @@ pub fn printGrid(self: *const Solver) void {
     for (0..self.puzzle.rowCount()) |row| {
         if (row != 0) {
             const hint = self.puzzle.row_hints[row - 1];
-            if (hint == null) print("  ", .{}) else print("{d:0>2}", .{hint.?});
+            if (hint) |it| print("{d:0>2}", .{it}) else print("  ", .{});
             print(" \u{2502}", .{});
         }
 
         for (0..self.puzzle.colCount()) |col| {
-            const cell = self.getCell(col, row);
-            const str1 = if (cell.seg_flags & Cell.seg_mask.nw != 0) "\u{2572}" else " ";
-            const str2 = if (cell.seg_flags & Cell.seg_mask.n != 0) "\u{2502}" else " ";
-            const str3 = if (cell.seg_flags & Cell.seg_mask.ne != 0) "\u{2571}" else " ";
+            const c = self.cell(col, row);
+            const str1 = if (c.seg_flags & Cell.seg_mask.nw != 0) "\u{2572}" else " ";
+            const str2 = if (c.seg_flags & Cell.seg_mask.n != 0) "\u{2502}" else " ";
+            const str3 = if (c.seg_flags & Cell.seg_mask.ne != 0) "\u{2571}" else " ";
             print("{s}{s}{s}", .{ str1, str2, str3 });
         }
         print("\n   \u{2502}", .{});
         for (0..self.puzzle.colCount()) |col| {
-            const cell = self.getCell(col, row);
-            const str1 = if (cell.seg_flags & Cell.seg_mask.w != 0) "\u{2500}" else " ";
-            const collapsed = cell.end_flags != 0 and (cell.end_flags & (cell.end_flags - 1) == 0);
-            const str2 = if (collapsed) &.{'A' + @as(u8, @ctz(cell.end_flags))} else "\u{2022}";
-            const str3 = if (cell.seg_flags & Cell.seg_mask.e != 0) "\u{2500}" else " ";
+            const c = self.cell(col, row);
+            const str1 = if (c.seg_flags & Cell.seg_mask.w != 0) "\u{2500}" else " ";
+            const collapsed = c.end_flags != 0 and (c.end_flags & (c.end_flags - 1) == 0);
+            const str2 = if (collapsed) &.{'A' + @as(u8, @ctz(c.end_flags))} else "\u{2022}";
+            const str3 = if (c.seg_flags & Cell.seg_mask.e != 0) "\u{2500}" else " ";
             print("{s}{s}{s}", .{ str1, str2, str3 });
         }
         print("\n   \u{2502}", .{});
         for (0..self.puzzle.colCount()) |col| {
-            const cell = self.getCell(col, row);
-            const str1 = if (cell.seg_flags & Cell.seg_mask.sw != 0) "\u{2571}" else " ";
-            const str2 = if (cell.seg_flags & Cell.seg_mask.s != 0) "\u{2502}" else " ";
-            const str3 = if (cell.seg_flags & Cell.seg_mask.se != 0) "\u{2572}" else " ";
+            const c = self.cell(col, row);
+            const str1 = if (c.seg_flags & Cell.seg_mask.sw != 0) "\u{2571}" else " ";
+            const str2 = if (c.seg_flags & Cell.seg_mask.s != 0) "\u{2502}" else " ";
+            const str3 = if (c.seg_flags & Cell.seg_mask.se != 0) "\u{2572}" else " ";
             print("{s}{s}{s}", .{ str1, str2, str3 });
         }
         print("\n", .{});

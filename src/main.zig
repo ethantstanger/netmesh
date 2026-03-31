@@ -4,6 +4,7 @@ const Solver = @import("Solver.zig");
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
     const a = arena.allocator();
 
     const puzzle = Puzzle{
@@ -21,7 +22,7 @@ pub fn main() !void {
             .c,
             null,
             null,
-            .b, 
+            .b,
             null,
             null,
             .a,
@@ -38,7 +39,8 @@ pub fn main() !void {
         },
     };
 
-    const solver = try Solver.from(a, &puzzle);
+    var solver = try Solver.from(a, &puzzle);
+    try solver.solve();
     solver.printData();
     solver.printGrid();
 }
