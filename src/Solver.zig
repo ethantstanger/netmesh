@@ -123,8 +123,36 @@ const Node = struct {
     }
 };
 
+const Cell = struct {
+    const CutState = enum { untakeable, untaken, taken };
+
+    nw: *Node,
+    ne: *Node,
+    sw: *Node,
+    se: *Node,
+    cut_state: CutState,
+
+    fn isSingleUntaken(self: *const Cell) bool {
+        if (self.cut_state != .untaken) return false;
+        return true;
+    }
+
+    fn takeCut(self: *const Cell) void {
+        self.nw.seg_flags &= seg_mask.full_se;
+        self.ne.seg_flags &= seg_mask.full_sw;
+        self.sw.seg_flags &= seg_mask.full_ne;
+        self.se.seg_flags &= seg_mask.full_nw;
+
+        self.nw.seg_flags &= ~(seg_mask.full_e | seg_mask.full_s);
+        self.ne.seg_flags &= ~(seg_mask.full_w | seg_mask.full_s);
+        self.sw.seg_flags &= ~(seg_mask.full_e | seg_mask.full_n);
+        self.se.seg_flags &= ~(seg_mask.full_w | seg_mask.full_n);
+    }
+};
+
 puzzle: *const Puzzle,
 nodes: []Node,
+last_read_cells: []Cell,
 
 pub const FromError = error{ EndsInvalidLen, EndsMustBePairs };
 
@@ -132,10 +160,15 @@ pub fn from(a: std.mem.Allocator, puzzle: *const Puzzle) !Solver {
     try puzzle.validate();
 
     const nodes = try a.alloc(Node, puzzle.size() * puzzle.size());
+    errdefer a.free(nodes);
+
+    const llc = try a.alloc(Cell, puzzle.size());
+    errdefer a.free(llc);
+
     const end_flags = (@as(u32, 1) << @intCast(puzzle.end_pairs.len)) - 1;
     @memset(nodes, .{ .seg_flags = seg_mask.full_path, .end_flags = end_flags });
 
-    var solver = Solver{ .puzzle = puzzle, .nodes = nodes };
+    var solver = Solver{ .puzzle = puzzle, .nodes = nodes, .last_read_cells = llc };
     for (puzzle.end_pairs, 0..) |pair, i| {
         for (pair) |it| {
             solver.node(it.x, it.y).end_flags = @as(u32, 1) << @intCast(i);
@@ -152,13 +185,18 @@ pub fn from(a: std.mem.Allocator, puzzle: *const Puzzle) !Solver {
     return solver;
 }
 
-const SolveError = error{};
+const SolveError = error{ImpossibleCutHint};
 
-pub fn solve(self: *Solver) SolveError!void {
+pub fn solve(self: *const Solver) SolveError!void {
     self.collapseAdjacentDisparateEnds();
+
+    for (0..self.puzzle.cut_hints.len) |i| {
+        try self.collapseCells(.col, i);
+        try self.collapseCells(.row, i);
+    }
 }
 
-fn collapseAdjacentDisparateEnds(self: *Solver) void {
+fn collapseAdjacentDisparateEnds(self: *const Solver) void {
     for (self.nodes) |*a| {
         if (a.e(self)) |b| inner: {
             if (a.end_flags & b.end_flags != 0) break :inner;
@@ -184,6 +222,68 @@ fn collapseAdjacentDisparateEnds(self: *Solver) void {
             b.seg_flags &= ~seg_mask.full_ne;
         }
     }
+}
+
+const Axis = enum { col, row };
+fn collapseCells(self: *const Solver, axis: Axis, i: usize) SolveError!void {
+    const hint = (if (axis == .col) self.puzzle.cut_hints[i].col else self.puzzle.cut_hints[i].row) orelse return;
+    const cells_meta = self.readCellsWithMeta(axis, i);
+
+    const taken_and_untaken_cuts = cells_meta.taken_cuts + cells_meta.untaken_cuts;
+    if (taken_and_untaken_cuts < hint) {
+        std.debug.print("=====\n{} - ({})\n=====\n", .{ axis, taken_and_untaken_cuts });
+        return SolveError.ImpossibleCutHint;
+    }
+    if (taken_and_untaken_cuts != hint) return;
+
+    for (self.last_read_cells) |c| {
+        if (c.isSingleUntaken()) c.takeCut();
+    }
+}
+
+const CellsMeta = struct {
+    taken_cuts: u8,
+    untaken_cuts: u8,
+};
+
+fn readCellsWithMeta(self: *const Solver, axis: Axis, i: usize) CellsMeta {
+    var cells_meta = CellsMeta{ .taken_cuts = 0, .untaken_cuts = 0 };
+    for (0..self.puzzle.cut_hints.len) |j| {
+        std.debug.print("{}\n", .{j});
+        const c = if (axis == .col) self.cell(i, j) else self.cell(j, i);
+        self.last_read_cells[j] = c;
+
+        if (c.cut_state == .taken) cells_meta.taken_cuts += 1;
+        if (c.cut_state == .untaken) cells_meta.untaken_cuts += 1;
+    }
+
+    return cells_meta;
+}
+
+fn cell(self: *const Solver, col: usize, row: usize) Cell {
+    const nw = self.node(col, row);
+    const ne = self.node(col + 1, row);
+    const sw = self.node(col, row + 1);
+    const se = self.node(col + 1, row + 1);
+
+    const cut_state: Cell.CutState = state: {
+        if (nw.seg_flags & ~(seg_mask.full_e | seg_mask.full_s) == 0) break :state .untakeable;
+        if (ne.seg_flags & ~(seg_mask.full_w | seg_mask.full_s) == 0) break :state .untakeable;
+        if (sw.seg_flags & ~(seg_mask.full_e | seg_mask.full_n) == 0) break :state .untakeable;
+        if (se.seg_flags & ~(seg_mask.full_w | seg_mask.full_n) == 0) break :state .untakeable;
+
+        const is_left = nw.seg_flags & ~seg_mask.full_se == 0;
+        const is_right = ne.seg_flags & ~seg_mask.full_sw == 0;
+        if (is_left and is_right) break :state .taken;
+
+        const has_left = nw.seg_flags & seg_mask.full_se != 0;
+        const has_right = ne.seg_flags & seg_mask.full_sw != 0;
+        if (has_left and has_right) break :state .untaken;
+        std.debug.print("HIT! - {} - {}\n", .{ col, row });
+        break :state .untakeable;
+    };
+
+    return .{ .nw = nw, .ne = ne, .sw = sw, .se = se, .cut_state = cut_state };
 }
 
 fn node(self: *const Solver, x: usize, y: usize) *Node {
