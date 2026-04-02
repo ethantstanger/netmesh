@@ -217,23 +217,23 @@ pub fn printGrid(self: *const Solver) void {
         print("\u{2500}" ** 3, .{});
     }
 
-    for (0..self.puzzle.size()) |row| {
-        if (row != 0) {
-            const hint = self.puzzle.cut_hints[row - 1].row;
+    for (0..self.puzzle.size()) |y| {
+        if (y != 0) {
+            const hint = self.puzzle.cut_hints[y - 1].row;
             if (hint) |it| print("{d:0>2}", .{it}) else print("  ", .{});
             print(" \u{2502}", .{});
         }
 
-        for (0..self.puzzle.size()) |col| {
-            const n = self.node(col, row);
+        for (0..self.puzzle.size()) |x| {
+            const n = self.node(x, y);
             const str1 = if (n.seg_flags & Node.seg_mask.full_nw != 0) "\u{2572}" else " ";
             const str2 = if (n.seg_flags & Node.seg_mask.full_n != 0) "\u{2502}" else " ";
             const str3 = if (n.seg_flags & Node.seg_mask.full_ne != 0) "\u{2571}" else " ";
             print("{s}{s}{s}", .{ str1, str2, str3 });
         }
         print("\n   \u{2502}", .{});
-        for (0..self.puzzle.size()) |col| {
-            const n = self.node(col, row);
+        for (0..self.puzzle.size()) |x| {
+            const n = self.node(x, y);
             const str1 = if (n.seg_flags & Node.seg_mask.full_w != 0) "\u{2500}" else " ";
             const collapsed = n.end_flags != 0 and (n.end_flags & (n.end_flags - 1) == 0);
             const str2 = if (collapsed) &.{'A' + @as(u8, @ctz(n.end_flags))} else "\u{2022}";
@@ -241,8 +241,8 @@ pub fn printGrid(self: *const Solver) void {
             print("{s}{s}{s}", .{ str1, str2, str3 });
         }
         print("\n   \u{2502}", .{});
-        for (0..self.puzzle.size()) |col| {
-            const n = self.node(col, row);
+        for (0..self.puzzle.size()) |x| {
+            const n = self.node(x, y);
             const str1 = if (n.seg_flags & Node.seg_mask.full_sw != 0) "\u{2571}" else " ";
             const str2 = if (n.seg_flags & Node.seg_mask.full_s != 0) "\u{2502}" else " ";
             const str3 = if (n.seg_flags & Node.seg_mask.full_se != 0) "\u{2572}" else " ";
