@@ -122,6 +122,44 @@ const Node = struct {
         return &solver.nodes[self.index(solver) - solver.puzzle.size() - 1];
     }
 
+    fn setSegFlagsAndPropagate(self: *Node, solver: *const Solver, new_flags: u32) void {
+        const prop_n = self.seg_flags & seg_mask.full_n != 0 and new_flags & seg_mask.full_n == 0;
+        const prop_ne = self.seg_flags & seg_mask.full_ne != 0 and new_flags & seg_mask.full_ne == 0;
+        const prop_e = self.seg_flags & seg_mask.full_e != 0 and new_flags & seg_mask.full_e == 0;
+        const prop_se = self.seg_flags & seg_mask.full_se != 0 and new_flags & seg_mask.full_se == 0;
+        const prop_s = self.seg_flags & seg_mask.full_s != 0 and new_flags & seg_mask.full_s == 0;
+        const prop_sw = self.seg_flags & seg_mask.full_sw != 0 and new_flags & seg_mask.full_sw == 0;
+        const prop_w = self.seg_flags & seg_mask.full_w != 0 and new_flags & seg_mask.full_w == 0;
+        const prop_nw = self.seg_flags & seg_mask.full_nw != 0 and new_flags & seg_mask.full_nw == 0;
+
+        if (prop_n) {
+            if (self.n(solver)) |it| it.seg_flags &= ~seg_mask.full_s;
+        }
+        if (prop_ne) {
+            if (self.ne(solver)) |it| it.seg_flags &= ~seg_mask.full_sw;
+        }
+        if (prop_e) {
+            if (self.e(solver)) |it| it.seg_flags &= ~seg_mask.full_w;
+        }
+        if (prop_se) {
+            if (self.se(solver)) |it| it.seg_flags &= ~seg_mask.full_nw;
+        }
+        if (prop_s) {
+            if (self.s(solver)) |it| it.seg_flags &= ~seg_mask.full_n;
+        }
+        if (prop_sw) {
+            if (self.sw(solver)) |it| it.seg_flags &= ~seg_mask.full_ne;
+        }
+        if (prop_w) {
+            if (self.w(solver)) |it| it.seg_flags &= ~seg_mask.full_e;
+        }
+        if (prop_nw) {
+            if (self.nw(solver)) |it| it.seg_flags &= ~seg_mask.full_se;
+        }
+
+        self.seg_flags = new_flags;
+    }
+
     fn areEndFlagsCollapsed(self: *const Node) bool {
         return self.end_flags != 0 and (self.end_flags & (self.end_flags - 1) == 0);
     }
@@ -158,16 +196,16 @@ const Cell = struct {
         return true;
     }
 
-    fn takeCut(self: *const Cell) void {
-        self.nw.seg_flags &= seg_mask.full_se;
-        self.ne.seg_flags &= seg_mask.full_sw;
-        self.sw.seg_flags &= seg_mask.full_ne;
-        self.se.seg_flags &= seg_mask.full_nw;
+    fn takeCut(self: *const Cell, solver: *const Solver) void {
+        self.nw.setSegFlagsAndPropagate(solver, self.nw.seg_flags & seg_mask.full_se);
+        self.ne.setSegFlagsAndPropagate(solver, self.ne.seg_flags & seg_mask.full_sw);
+        self.sw.setSegFlagsAndPropagate(solver, self.sw.seg_flags & seg_mask.full_ne);
+        self.se.setSegFlagsAndPropagate(solver, self.se.seg_flags & seg_mask.full_nw);
 
-        self.nw.seg_flags &= ~(seg_mask.full_e | seg_mask.full_s);
-        self.ne.seg_flags &= ~(seg_mask.full_w | seg_mask.full_s);
-        self.sw.seg_flags &= ~(seg_mask.full_e | seg_mask.full_n);
-        self.se.seg_flags &= ~(seg_mask.full_w | seg_mask.full_n);
+        self.nw.setSegFlagsAndPropagate(solver, self.nw.seg_flags & ~(seg_mask.full_e | seg_mask.full_s));
+        self.ne.setSegFlagsAndPropagate(solver, self.ne.seg_flags & ~(seg_mask.full_w | seg_mask.full_s));
+        self.sw.setSegFlagsAndPropagate(solver, self.sw.seg_flags & ~(seg_mask.full_e | seg_mask.full_n));
+        self.se.setSegFlagsAndPropagate(solver, self.se.seg_flags & ~(seg_mask.full_w | seg_mask.full_n));
     }
 };
 
@@ -211,9 +249,19 @@ const SolveError = error{ImpossibleCutHint};
 pub fn solve(self: *const Solver) SolveError!void {
     self.collapseAdjacentDisparateEnds();
 
-    for (0..self.puzzle.cut_hints.len) |i| {
-        try self.collapseCells(.col, i);
-        try self.collapseCells(.row, i);
+    while (true) {
+        var buffer: [1024]u8 = undefined;
+        var threaded = std.Io.Threaded.init_single_threaded;
+        const io = threaded.io();
+        var reader = std.Io.File.stdin().reader(io, &buffer);
+        _ = reader.interface.takeByte() catch unreachable;
+
+        self.printGrid();
+
+        for (0..self.puzzle.cut_hints.len) |i| {
+            try self.collapseCells(.col, i);
+            try self.collapseCells(.row, i);
+        }
     }
 }
 
@@ -251,14 +299,11 @@ fn collapseCells(self: *const Solver, axis: Axis, i: usize) SolveError!void {
     const cells_meta = self.readCellsWithMeta(axis, i);
 
     const taken_and_untaken_cuts = cells_meta.taken_cuts + cells_meta.untaken_cuts;
-    if (taken_and_untaken_cuts < hint) {
-        std.debug.print("=====\n{} - ({})\n=====\n", .{ axis, taken_and_untaken_cuts });
-        return SolveError.ImpossibleCutHint;
-    }
+    if (taken_and_untaken_cuts < hint) return SolveError.ImpossibleCutHint;
     if (taken_and_untaken_cuts != hint) return;
 
     for (self.last_read_cells) |c| {
-        if (c.isSingleUntaken()) c.takeCut();
+        if (c.isSingleUntaken()) c.takeCut(self);
     }
 }
 
@@ -270,7 +315,6 @@ const CellsMeta = struct {
 fn readCellsWithMeta(self: *const Solver, axis: Axis, i: usize) CellsMeta {
     var cells_meta = CellsMeta{ .taken_cuts = 0, .untaken_cuts = 0 };
     for (0..self.puzzle.cut_hints.len) |j| {
-        std.debug.print("{}\n", .{j});
         const c = if (axis == .col) self.cell(i, j) else self.cell(j, i);
         self.last_read_cells[j] = c;
 
@@ -300,7 +344,6 @@ fn cell(self: *const Solver, col: usize, row: usize) Cell {
         const has_left = nw.seg_flags & seg_mask.full_se != 0;
         const has_right = ne.seg_flags & seg_mask.full_sw != 0;
         if (has_left and has_right) break :state .untaken;
-        std.debug.print("HIT! - {} - {}\n", .{ col, row });
         break :state .untakeable;
     };
 
