@@ -24,9 +24,9 @@ pub fn main() !void {
     };
 
     var solver = try Solver.from(a, &puzzle);
+    solver.printData();
+    solver.printGrid();
     solver.solve() catch |err| {
         std.debug.print("==============================\n{}\n==============================\n", .{err});
     };
-    solver.printData();
-    solver.printGrid();
 }

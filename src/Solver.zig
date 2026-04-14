@@ -123,55 +123,81 @@ const Node = struct {
     }
 
     fn setSegFlagsAndPropagate(self: *Node, solver: *const Solver, new_flags: u32) void {
-        const prop_n = self.seg_flags & seg_mask.full_n != 0 and new_flags & seg_mask.full_n == 0;
-        const prop_ne = self.seg_flags & seg_mask.full_ne != 0 and new_flags & seg_mask.full_ne == 0;
-        const prop_e = self.seg_flags & seg_mask.full_e != 0 and new_flags & seg_mask.full_e == 0;
-        const prop_se = self.seg_flags & seg_mask.full_se != 0 and new_flags & seg_mask.full_se == 0;
-        const prop_s = self.seg_flags & seg_mask.full_s != 0 and new_flags & seg_mask.full_s == 0;
-        const prop_sw = self.seg_flags & seg_mask.full_sw != 0 and new_flags & seg_mask.full_sw == 0;
-        const prop_w = self.seg_flags & seg_mask.full_w != 0 and new_flags & seg_mask.full_w == 0;
-        const prop_nw = self.seg_flags & seg_mask.full_nw != 0 and new_flags & seg_mask.full_nw == 0;
-
-        if (prop_n) {
-            if (self.n(solver)) |it| it.seg_flags &= ~seg_mask.full_s;
-        }
-        if (prop_ne) {
-            if (self.ne(solver)) |it| it.seg_flags &= ~seg_mask.full_sw;
-        }
-        if (prop_e) {
-            if (self.e(solver)) |it| it.seg_flags &= ~seg_mask.full_w;
-        }
-        if (prop_se) {
-            if (self.se(solver)) |it| it.seg_flags &= ~seg_mask.full_nw;
-        }
-        if (prop_s) {
-            if (self.s(solver)) |it| it.seg_flags &= ~seg_mask.full_n;
-        }
-        if (prop_sw) {
-            if (self.sw(solver)) |it| it.seg_flags &= ~seg_mask.full_ne;
-        }
-        if (prop_w) {
-            if (self.w(solver)) |it| it.seg_flags &= ~seg_mask.full_e;
-        }
-        if (prop_nw) {
-            if (self.nw(solver)) |it| it.seg_flags &= ~seg_mask.full_se;
-        }
+        const prune_n = self.seg_flags & seg_mask.full_n != 0 and new_flags & seg_mask.full_n == 0;
+        const prune_ne = self.seg_flags & seg_mask.full_ne != 0 and new_flags & seg_mask.full_ne == 0;
+        const prune_e = self.seg_flags & seg_mask.full_e != 0 and new_flags & seg_mask.full_e == 0;
+        const prune_se = self.seg_flags & seg_mask.full_se != 0 and new_flags & seg_mask.full_se == 0;
+        const prune_s = self.seg_flags & seg_mask.full_s != 0 and new_flags & seg_mask.full_s == 0;
+        const prune_sw = self.seg_flags & seg_mask.full_sw != 0 and new_flags & seg_mask.full_sw == 0;
+        const prune_w = self.seg_flags & seg_mask.full_w != 0 and new_flags & seg_mask.full_w == 0;
+        const prune_nw = self.seg_flags & seg_mask.full_nw != 0 and new_flags & seg_mask.full_nw == 0;
 
         self.seg_flags = new_flags;
+        const taken_neighbors: [8]?*Node = .{
+            if (new_flags & ~seg_mask.full_n == 0) self.n(solver) else null,
+            if (new_flags & ~seg_mask.full_ne == 0) self.ne(solver) else null,
+            if (new_flags & ~seg_mask.full_e == 0) self.e(solver) else null,
+            if (new_flags & ~seg_mask.full_se == 0) self.se(solver) else null,
+            if (new_flags & ~seg_mask.full_s == 0) self.s(solver) else null,
+            if (new_flags & ~seg_mask.full_sw == 0) self.sw(solver) else null,
+            if (new_flags & ~seg_mask.full_w == 0) self.w(solver) else null,
+            if (new_flags & ~seg_mask.full_nw == 0) self.nw(solver) else null,
+        };
+
+        for (taken_neighbors) |neighbor| {
+            const it = neighbor orelse continue;
+            std.debug.print("{b:0>32} - {}\n", .{ it.end_flags, it.index(solver) });
+            self.end_flags &= it.end_flags;
+        }
+
+        std.debug.print("{b:0>32}\n\n", .{self.end_flags});
+
+        if (prune_n) if (self.n(solver)) |it| {
+            it.setSegFlagsAndPropagate(solver, it.seg_flags & ~seg_mask.full_s);
+        };
+
+        if (prune_ne) if (self.ne(solver)) |it| {
+            it.setSegFlagsAndPropagate(solver, it.seg_flags & ~seg_mask.full_sw);
+        };
+
+        if (prune_e) if (self.e(solver)) |it| {
+            it.setSegFlagsAndPropagate(solver, it.seg_flags & ~seg_mask.full_w);
+        };
+
+        if (prune_se) if (self.se(solver)) |it| {
+            it.setSegFlagsAndPropagate(solver, it.seg_flags & ~seg_mask.full_nw);
+        };
+
+        if (prune_s) if (self.s(solver)) |it| {
+            it.setSegFlagsAndPropagate(solver, it.seg_flags & ~seg_mask.full_n);
+        };
+
+        if (prune_sw) if (self.sw(solver)) |it| {
+            it.setSegFlagsAndPropagate(solver, it.seg_flags & ~seg_mask.full_ne);
+        };
+
+        if (prune_w) if (self.w(solver)) |it| {
+            it.setSegFlagsAndPropagate(solver, it.seg_flags & ~seg_mask.full_e);
+        };
+
+        if (prune_nw) if (self.nw(solver)) |it| {
+            it.setSegFlagsAndPropagate(solver, it.seg_flags & ~seg_mask.full_se);
+        };
     }
 
-    fn areEndFlagsCollapsed(self: *const Node) bool {
-        return self.end_flags != 0 and (self.end_flags & (self.end_flags - 1) == 0);
+    fn getEnd(self: *const Node) ?u8 {
+        const fully_collapsed = self.end_flags != 0 and (self.end_flags & (self.end_flags - 1) == 0);
+        if (fully_collapsed) return @as(u8, @ctz(self.end_flags));
+        return null;
     }
 
     fn getEndPrintChar(self: *const Node) ?u8 {
-        if (!self.areEndFlagsCollapsed()) return null;
-        return 'A' + @as(u8, @ctz(self.end_flags));
+        return if (self.getEnd()) |end| 'A' + end else null;
     }
 
     fn getPrintColor(self: *const Node) *const [7:0]u8 {
-        if (!self.areEndFlagsCollapsed()) return "\x1b[0;37m";
-        return switch (@as(u8, @ctz(self.end_flags)) % 6) {
+        const end = self.getEnd() orelse return "\x1b[0;37m";
+        return switch (end % 6) {
             0 => "\x1b[0;31m",
             1 => "\x1b[0;32m",
             2 => "\x1b[0;33m",
@@ -213,7 +239,7 @@ puzzle: *const Puzzle,
 nodes: []Node,
 last_read_cells: []Cell,
 
-pub const FromError = error{ EndsInvalidLen, EndsMustBePairs };
+pub const FromError = error{};
 
 pub fn from(a: std.mem.Allocator, puzzle: *const Puzzle) !Solver {
     try puzzle.validate();
@@ -221,13 +247,13 @@ pub fn from(a: std.mem.Allocator, puzzle: *const Puzzle) !Solver {
     const nodes = try a.alloc(Node, puzzle.size() * puzzle.size());
     errdefer a.free(nodes);
 
-    const llc = try a.alloc(Cell, puzzle.size());
-    errdefer a.free(llc);
+    const lrc = try a.alloc(Cell, puzzle.size());
+    errdefer a.free(lrc);
 
     const end_flags = (@as(u32, 1) << @intCast(puzzle.end_pairs.len)) - 1;
     @memset(nodes, .{ .seg_flags = seg_mask.full_path, .end_flags = end_flags });
 
-    var solver = Solver{ .puzzle = puzzle, .nodes = nodes, .last_read_cells = llc };
+    var solver = Solver{ .puzzle = puzzle, .nodes = nodes, .last_read_cells = lrc };
     for (puzzle.end_pairs, 0..) |pair, i| {
         for (pair) |it| {
             solver.node(it.x, it.y).end_flags = @as(u32, 1) << @intCast(i);
@@ -250,15 +276,15 @@ pub fn solve(self: *const Solver) SolveError!void {
     self.collapseAdjacentDisparateEnds();
 
     while (true) {
-        var buffer: [1024]u8 = undefined;
-        var threaded = std.Io.Threaded.init_single_threaded;
-        const io = threaded.io();
-        var reader = std.Io.File.stdin().reader(io, &buffer);
-        _ = reader.interface.takeByte() catch unreachable;
-
-        self.printGrid();
-
         for (0..self.puzzle.cut_hints.len) |i| {
+            var buffer: [1024]u8 = undefined;
+            var threaded = std.Io.Threaded.init_single_threaded;
+            const io = threaded.io();
+            var reader = std.Io.File.stdin().reader(io, &buffer);
+            _ = reader.interface.takeByte() catch unreachable;
+
+            self.printGrid();
+
             try self.collapseCells(.col, i);
             try self.collapseCells(.row, i);
         }
